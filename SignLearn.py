@@ -17,6 +17,10 @@ import plotly.express as px
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 import av
 import threading
+import os
+import subprocess
+from pathlib import Path
+from scipy.spatial.distance import euclidean
 import queue
 import sqlite3
 from pathlib import Path
@@ -38,8 +42,8 @@ YOUTUBE_VIDEOS = {
     # ALPHABET SIGNS
     'A': {
         'video_id': 'tkMg8g8vVUo',  # ASL Alphabet A-Z
-        'start_time': 3,
-        'end_time': 8,
+        'start_time': 2,
+        'end_time': 6,
         'title': 'ASL Letter A - Fist with Thumb',
         'description': 'Learn to form the letter A in American Sign Language',
         'difficulty': 1,
@@ -47,8 +51,8 @@ YOUTUBE_VIDEOS = {
     },
     'B': {
         'video_id': 'tkMg8g8vVUo',
-        'start_time': 9,
-        'end_time': 14,
+        'start_time': 7,
+        'end_time': 13,
         'title': 'ASL Letter B - Flat Hand',
         'description': 'Learn to form the letter B with flat hand and tucked thumb',
         'difficulty': 1,
@@ -56,8 +60,8 @@ YOUTUBE_VIDEOS = {
     },
     'C': {
         'video_id': 'tkMg8g8vVUo',
-        'start_time': 15,
-        'end_time': 20,
+        'start_time': 14,
+        'end_time': 19,
         'title': 'ASL Letter C - Curved Hand',
         'description': 'Learn to form the letter C with curved hand shape',
         'difficulty': 1,
@@ -65,8 +69,8 @@ YOUTUBE_VIDEOS = {
     },
     'D': {
         'video_id': 'tkMg8g8vVUo',
-        'start_time': 21,
-        'end_time': 26,
+        'start_time': 20,
+        'end_time': 25,
         'title': 'ASL Letter D - Index Finger Up',
         'description': 'Learn to form the letter D with index finger pointing up',
         'difficulty': 1,
@@ -74,8 +78,8 @@ YOUTUBE_VIDEOS = {
     },
     'E': {
         'video_id': 'tkMg8g8vVUo',
-        'start_time': 27,
-        'end_time': 32,
+        'start_time': 26,
+        'end_time': 31,
         'title': 'ASL Letter E - Bent Fingers',
         'description': 'Learn to form the letter E with bent fingertips',
         'difficulty': 1,
@@ -391,50 +395,85 @@ class VideoManager:
         # Basic validation - YouTube video IDs are typically 11 characters
         return len(video_id) == 11 and video_id.isalnum()
 
-# Enhanced YouTube player creation function
-def create_enhanced_youtube_player(video_info, width="100%", height=400):
-    """Create an enhanced YouTube player with additional features."""
-    video_id = video_info['video_id']
-    start_time = video_info.get('start_time', 0)
-    end_time = video_info.get('end_time', None)
+
+# --- Local Video Download and Playback Utilities ---
+def download_youtube_video(video_id, start_time=0, end_time=None, cache_dir=".video_cache"):
+    """
+    Download a YouTube video by video_id and trim it to the specified start and end time.
+    Returns the local file path to the trimmed video.
+    Uses yt-dlp and ffmpeg (must be installed in the system).
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    base_path = Path(cache_dir)
+    video_file = base_path / f"{video_id}.mp4"
+    trimmed_file = base_path / f"{video_id}_{start_time}_{end_time or 'end'}.mp4"
+
+    # Download if not already present
+    if not video_file.exists():
+        # Download the best mp4 format using yt-dlp
+        ytdlp_cmd = [
+            "yt-dlp",
+            f"https://www.youtube.com/watch?v={video_id}",
+            "-f", "mp4",
+            "-o", str(video_file)
+        ]
+        try:
+            subprocess.run(ytdlp_cmd, check=True)
+        except Exception as e:
+            print(f"Error downloading video: {e}")
+            return None
+
+    # Trim if not already present
+    if not trimmed_file.exists():
+        # Build ffmpeg trim command
+        ffmpeg_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_file),
+            "-ss", str(start_time)
+        ]
+        if end_time:
+            duration = int(end_time) - int(start_time)
+            ffmpeg_cmd += ["-t", str(duration)]
+        ffmpeg_cmd += ["-c:v", "copy", "-c:a", "copy", str(trimmed_file)]
+        try:
+            subprocess.run(ffmpeg_cmd, check=True)
+        except Exception as e:
+            print(f"Error trimming video: {e}")
+            return None
+
+    return str(trimmed_file)
+
+import base64
+
+def create_local_video_player(local_video_path, video_info, width="100%", height=400):
+    """
+    Create a looping HTML5 video player for a local video file with metadata display.
+    """
+    # Read the video file and encode it as base64
+    with open(local_video_path, "rb") as file:
+        video_bytes = file.read()
+        b64 = base64.b64encode(video_bytes).decode()
     
-    # Build YouTube URL with parameters
-    youtube_url = f"https://www.youtube.com/embed/{video_id}?start={start_time}"
-    
-    if end_time:
-        youtube_url += f"&end={end_time}"
-    
-    # Add additional parameters for better learning experience
-    youtube_url += "&autoplay=1&loop=1&controls=1&modestbranding=1&rel=0&showinfo=0"
-    
-    youtube_html = f"""
-    <div style="position: relative; width: 100%; margin-bottom: 20px;">
-        <iframe 
-            width="{width}" 
-            height="{height}" 
-            src="{youtube_url}"
-            frameborder="0" 
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-            allowfullscreen
-            style="border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-        </iframe>
-        <div style="margin-top: 10px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
-            <h4 style="margin: 0 0 5px 0; color: #333;">{video_info.get('title', 'ASL Tutorial')}</h4>
-            <p style="margin: 0; color: #666; font-size: 14px;">{video_info.get('description', '')}</p>
-            <div style="margin-top: 8px;">
-                <span style="background-color: #e3f2fd; color: #1976d2; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 5px;">
-                    {video_info.get('category', 'General')}
-                </span>
-                <span style="background-color: #f3e5f5; color: #7b1fa2; padding: 2px 8px; border-radius: 12px; font-size: 12px;">
-                    Level {video_info.get('difficulty', 1)}
-                </span>
-            </div>
-        </div>
-    </div>
+    # Create HTML with looping video
+    video_html = f"""
+    <video width="100%" height="{height}" controls autoplay loop>
+        <source src="data:video/mp4;base64,{b64}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
     """
     
-    return youtube_html
-
+    # Display the HTML video player
+    components.html(video_html, height=height+20)
+    
+    # Display video metadata
+    st.markdown(f"**{video_info.get('title', 'ASL Tutorial')}**")
+    st.markdown(f"*{video_info.get('description', '')}*")
+    st.markdown(f"**Category:** {video_info.get('category', 'General')} | Level {video_info.get('difficulty', 1)}")
+    
+    # Optional: Display warning for larger videos that might cause performance issues
+    file_size_mb = os.path.getsize(local_video_path) / (1024 * 1024)
+    if file_size_mb > 10:  # Warning for videos larger than 10MB
+        st.info(f"Video size: {file_size_mb:.1f}MB. Looping large videos may affect performance.")
 # Database setup
 @st.cache_resource
 def init_database():
@@ -781,82 +820,29 @@ def create_youtube_player(video_id, start_time=0, end_time=None, height=400):
     return html_code
 
 
-# # YouTube Video Component
-# def create_youtube_player(video_id, start_time=0, end_time=None, height=400):
-#     """Create YouTube player component with optional start and end times."""
-    
-#     # Build the base URL with start time
-#     url_params = f"start={start_time}&autoplay=1&loop=1&playlist={video_id}&controls=1&modestbranding=1"
-    
-#     # Add end time if specified
-#     if end_time is not None:
-#         url_params += f"&end={end_time}"
-    
-#     youtube_html = f"""
-#     <iframe 
-#         width="100%" 
-#         height="{height}" 
-#         src="https://www.youtube.com/embed/{video_id}?{url_params}"
-#         frameborder="0" 
-#         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-#         allowfullscreen>
-#     </iframe>
-#     """
-#     return youtube_html
 
 # Enhanced lesson integration with video system
 def display_video_tutorial(current_sign):
-    """Enhanced video tutorial display function."""
+    """Enhanced video tutorial display function with local download and playback."""
     st.markdown("#### 📹 Video Tutorial")
-    
-    # Initialize video manager
     video_manager = VideoManager()
-    
-    # Get video info for current sign
     video_info = video_manager.get_video_info(current_sign)
-    
-    if video_info:
-        # Create enhanced YouTube player
-        youtube_html = create_enhanced_youtube_player(video_info, height=350)
-        components.html(youtube_html, height=420)  # Extra height for info section
-        
-        # Additional video controls
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("🔄 Replay", key=f"replay_{current_sign}"):
-                st.rerun()
-        
-        with col2:
-            if st.button("⏩ Skip to End", key=f"skip_{current_sign}"):
-                # You can add JavaScript to skip to end time
-                pass
-        
-        with col3:
-            playback_speed = st.selectbox(
-                "Speed", 
-                ["0.5x", "0.75x", "1x", "1.25x"], 
-                index=2,
-                key=f"speed_{current_sign}"
-            )
-        
-        # Show video metadata
-        with st.expander("📋 Video Details"):
-            st.write(f"**Category:** {video_info.get('category', 'General')}")
-            st.write(f"**Difficulty:** {'⭐' * video_info.get('difficulty', 1)}")
-            st.write(f"**Duration:** {video_info.get('start_time', 0)}s - {video_info.get('end_time', 'End')}s")
-            
-            # Related videos
-            related_videos = video_manager.get_videos_by_category(video_info.get('category', ''))
-            if len(related_videos) > 1:
-                st.write("**Related Signs:**")
-                related_signs = [sign for sign in related_videos.keys() if sign != current_sign]
-                st.write(", ".join(related_signs[:5]))  # Show first 5 related signs
+    if video_info and video_info.get('video_id') and len(video_info['video_id']) == 11:
+        # Download and play locally
+        local_video = download_youtube_video(
+            video_info['video_id'],
+            start_time=video_info.get('start_time', 0),
+            end_time=video_info.get('end_time', None)
+        )
+        if local_video:
+            create_local_video_player(local_video, video_info, height=350)
+        else:
+            st.warning("Could not download or process the video. Showing YouTube fallback.")
+            youtube_url = f"https://www.youtube.com/watch?v={video_info['video_id']}"
+            st.markdown(f"[Watch on YouTube]({youtube_url})")
     else:
         # Fallback for signs without videos
         st.info(f"📹 Video tutorial for '{current_sign}' is coming soon!")
-        
-        # Show placeholder with sign description
         sign_model = SignLanguageModel()
         if current_sign in sign_model.signs_data:
             sign_info = sign_model.signs_data[current_sign]
@@ -867,10 +853,7 @@ def display_video_tutorial(current_sign):
             
             💡 **Tip:** Practice the hand shape slowly and focus on finger positioning.
             """)
-        
-        # Suggest similar videos
-        video_manager = VideoManager()
-        all_videos = video_manager.get_videos_by_category('Basic')  # Default fallback
+        all_videos = video_manager.get_videos_by_category('Basic')
         if all_videos:
             st.write("**You might also like these tutorials:**")
             for sign, info in list(all_videos.items())[:3]:
@@ -1219,12 +1202,11 @@ def main():
     
     # Main content tabs
     if st.session_state.current_user:
-        tabs = st.tabs([
-            "📚 Lessons",
-            "🎯 Practice",
-            "📊 Progress",
-            "🏆 Achievements"
-        ])
+        if "active_tab" not in st.session_state:
+            st.session_state["active_tab"] = 0
+        tabs = st.tabs(
+    ["📚 Lessons", "🎯 Practice", "📊 Progress", "🏆 Achievements"]
+)
     
         # Lessons Tab (keeping existing structure)
         with tabs[0]:
@@ -1264,7 +1246,8 @@ def main():
                                         'start_time': time.time()
                                     }
                                     st.success(f"Started: {lesson[1]}")
-                                    st.rerun()
+                                    st.info("Move to the Practice Tab")
+                                    #st.rerun()
         
         # Enhanced Practice Tab with YouTube integration
         with tabs[1]:
@@ -1285,44 +1268,117 @@ def main():
                     # Create two columns for video tutorial and practice camera
                     video_col, camera_col, progress_col = st.columns([1, 1, 0.5])
                     
+                    # ...existing code...
                     with video_col:
-                        st.markdown("#### 📹 Video Tutorial")
+                                        st.markdown("#### 📹 Video Tutorial")
+                                        # Get YouTube video for current sign
+                                        if current_sign in YOUTUBE_VIDEOS:
+                                            video_info = YOUTUBE_VIDEOS[current_sign]
+                                            # Only download if video_id is a valid YouTube ID (11 chars)
+                                            if len(video_info['video_id']) == 11:
+                                                local_video = download_youtube_video(
+                                                    video_info['video_id'],
+                                                    start_time=video_info.get('start_time', 0),
+                                                    end_time=video_info.get('end_time', None)
+                                                )
+                                                if local_video:
+                                                    create_local_video_player(local_video, video_info, height=350)
+                                                else:
+                                                    st.warning("Could not download or process the video. Showing YouTube fallback.")
+                                                    youtube_url = f"https://www.youtube.com/watch?v={video_info['video_id']}"
+                                                    st.markdown(f"[Watch on YouTube]({youtube_url})")
+                                            else:
+                                                st.info(f"Video tutorial for '{current_sign}' coming soon!")
+                                            # Display sign information
+                                            sign_model = SignLanguageModel()
+                                            if current_sign in sign_model.signs_data:
+                                                sign_info = sign_model.signs_data[current_sign]
+                                                st.markdown(f"**Description:** {sign_info['description']}")
+                                                st.markdown(f"**Category:** {sign_info['category']}")
+                                        else:
+                                            st.info(f"Video tutorial for '{current_sign}' coming soon!")
+# ...existing code...
+                    
+                    # with video_col:
+                    #     st.markdown("#### 📹 Video Tutorial")
                         
                         # Get YouTube video for current sign
-                        if current_sign in YOUTUBE_VIDEOS:
-                            video_info = YOUTUBE_VIDEOS[current_sign]
-                            youtube_html = create_youtube_player(
-                                video_info['video_id'], 
-                                video_info['start_time'],
-                                height=350
-                            )
-                            components.html(youtube_html, height=350)
+                        # if current_sign in YOUTUBE_VIDEOS:
+                        #     video_info = YOUTUBE_VIDEOS[current_sign]
+                        #     youtube_html = create_youtube_player(
+                        #         video_info['video_id'], 
+                        #         video_info['start_time'],
+                        #         height=350
+                        #     )
+                        #     components.html(youtube_html, height=350)
                             
-                            st.markdown(f"**{video_info['title']}**")
+                        #     st.markdown(f"**{video_info['title']}**")
                             
-                            # Display sign information
-                            sign_model = SignLanguageModel()
-                            if current_sign in sign_model.signs_data:
-                                sign_info = sign_model.signs_data[current_sign]
-                                st.markdown(f"**Description:** {sign_info['description']}")
-                                st.markdown(f"**Category:** {sign_info['category']}")
-                        else:
-                            st.info(f"Video tutorial for '{current_sign}' coming soon!")
+                        #     # Display sign information
+                        #     sign_model = SignLanguageModel()
+                        #     if current_sign in sign_model.signs_data:
+                        #         sign_info = sign_model.signs_data[current_sign]
+                        #         st.markdown(f"**Description:** {sign_info['description']}")
+                        #         st.markdown(f"**Category:** {sign_info['category']}")
+                        # else:
+                        #     st.info(f"Video tutorial for '{current_sign}' coming soon!")
                     
+#                     with camera_col:
+#                         st.markdown("#### 📷 Your Practice")
+#                         st.markdown("Show the sign to your camera:")
+                        
+#                         # Initialize video processor for current sign
+#                         if st.session_state.video_processor is None:
+#                             st.session_state.video_processor = VideoProcessor(
+#                                 target_sign=current_sign,
+#                                 reference_landmarks=None  # In real implementation, extract from video
+#                             )
+                        
+#                         # WebRTC video stream with enhanced processing
+#                         # This is the connection between your last code and the new code
+# # Your code ends here:
                     with camera_col:
                         st.markdown("#### 📷 Your Practice")
                         st.markdown("Show the sign to your camera:")
-                        
-                        # Initialize video processor for current sign
-                        if st.session_state.video_processor is None:
+
+                        # --- Extract reference landmarks from the tutorial video ---
+                        def extract_reference_landmarks_from_video(video_path):
+                            hands, mp_hands, mp_drawing = load_mediapipe()
+                            cap = cv2.VideoCapture(video_path)
+                            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                            middle_frame = frame_count // 2
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, middle_frame)
+                            ret, frame = cap.read()
+                            cap.release()
+                            if not ret:
+                                return None
+                            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                            results = hands.process(frame_rgb)
+                            if results.multi_hand_landmarks:
+                                landmarks = results.multi_hand_landmarks[0]
+                                return [(lm.x, lm.y, lm.z) for lm in landmarks.landmark]
+                            return None
+
+                        # --- Initialize video processor with reference landmarks ---
+                        if st.session_state.video_processor is None or \
+                        st.session_state.video_processor.target_sign != current_sign:
+                            reference_landmarks = None
+                            if current_sign in YOUTUBE_VIDEOS:
+                                video_info = YOUTUBE_VIDEOS[current_sign]
+                                if len(video_info['video_id']) == 11:
+                                    local_video = download_youtube_video(
+                                        video_info['video_id'],
+                                        start_time=video_info.get('start_time', 0),
+                                        end_time=video_info.get('end_time', None)
+                                    )
+                                    if local_video:
+                                        reference_landmarks = extract_reference_landmarks_from_video(local_video)
                             st.session_state.video_processor = VideoProcessor(
                                 target_sign=current_sign,
-                                reference_landmarks=None  # In real implementation, extract from video
+                                reference_landmarks=reference_landmarks
                             )
-                        
-                        # WebRTC video stream with enhanced processing
-                        # This is the connection between your last code and the new code
-# Your code ends here:
+
+                        # --- WebRTC video stream with enhanced processing ---
                         webrtc_ctx = webrtc_streamer(
                             key=f"sign-detection-{current_sign}",
                             mode=WebRtcMode.SENDRECV,
@@ -1331,7 +1387,41 @@ def main():
                             }),
                             video_frame_callback=st.session_state.video_processor.process,
                             async_processing=True,
-                            )
+                        )
+
+                        # --- Display current detection results and auto-advance option ---
+                        if webrtc_ctx.video_processor:
+                            processor = webrtc_ctx.video_processor
+                            similarity = getattr(processor, 'similarity_score', 0)
+                            detected_sign = getattr(processor, 'current_prediction', None)
+
+                            if similarity >= 70:
+                                st.success(f"✅ Correct sign! Similarity: {similarity:.1f}%")
+                                if st.button("Next Sign ▶️", use_container_width=True):
+                                    progress['scores'].append(similarity)
+                                    progress['similarity_scores'].append(similarity)
+                                    progress['current_sign'] += 1
+                                    st.session_state.video_processor = None  # Reset for next sign
+                                    st.experimental_rerun()
+                            else:
+                                # if detected_sign:
+                                #     st.markdown(f"**Detected:** {detected_sign}")
+                                if similarity > 0:
+                                    if similarity >= 60:
+                                        st.info(f"Similarity: {similarity:.1f}% - Good job! 👍")
+                                    elif similarity >= 50:
+                                        st.warning(f"Similarity: {similarity:.1f}% - Getting better! 📈")
+                                    else:
+                                        st.error(f"Similarity: {similarity:.1f}% - Keep practicing! 💪")
+                        # webrtc_ctx = webrtc_streamer(
+                        #     key=f"sign-detection-{current_sign}",
+                        #     mode=WebRtcMode.SENDRECV,
+                        #     rtc_configuration=RTCConfiguration({
+                        #         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+                        #     }),
+                        #     video_frame_callback=st.session_state.video_processor.process,
+                        #     async_processing=True,
+                        #    )
 
                             # Display current detection results
                         if webrtc_ctx.video_processor:
@@ -1438,6 +1528,7 @@ def main():
                             
                             time.sleep(1)
                             st.rerun()
+                            
                     
                     with col2:
                         if st.button("❌ Need Help", use_container_width=True):
@@ -1555,6 +1646,7 @@ def main():
                         st.session_state.current_lesson = None
                         st.session_state.lesson_progress = {}
                         st.rerun()
+                        st.session_state["active_tab"] = 1  # 0=Lessons, 1=Practice, etc.
         
         # Progress Tab (Enhanced)
         with tabs[2]:
@@ -1770,841 +1862,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# import streamlit as st
-# import cv2
-# import mediapipe as mp
-# import numpy as np
-# import pandas as pd
-# import tensorflow as tf
-# from tensorflow import keras
-# import pickle
-# import json
-# import time
-# from datetime import datetime, timedelta
-# import requests
-# import io
-# from PIL import Image
-# import plotly.graph_objects as go
-# import plotly.express as px
-# from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
-# import av
-# import threading
-# import queue
-# import sqlite3
-# from pathlib import Path
-# import base64
-
-# # Configure Streamlit page
-# st.set_page_config(
-#     page_title="SignLearn Studio",
-#     page_icon="🤟",
-#     layout="wide",
-#     initial_sidebar_state="expanded"
-# )
-
-# # Database setup
-# @st.cache_resource
-# def init_database():
-#     """Initialize SQLite database for user progress."""
-#     db_path = "signlearn.db"
-#     conn = sqlite3.connect(db_path, check_same_thread=False)
-    
-#     # Create tables
-#     conn.execute("""
-#         CREATE TABLE IF NOT EXISTS users (
-#             id INTEGER PRIMARY KEY AUTOINCREMENT,
-#             username TEXT UNIQUE NOT NULL,
-#             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             total_points INTEGER DEFAULT 0,
-#             current_level INTEGER DEFAULT 1,
-#             streak_days INTEGER DEFAULT 0,
-#             last_practice_date DATE
-#         )
-#     """)
-    
-#     conn.execute("""
-#         CREATE TABLE IF NOT EXISTS lessons (
-#             id INTEGER PRIMARY KEY AUTOINCREMENT,
-#             name TEXT NOT NULL,
-#             category TEXT NOT NULL,
-#             difficulty INTEGER DEFAULT 1,
-#             signs TEXT NOT NULL,
-#             description TEXT
-#         )
-#     """)
-    
-#     conn.execute("""
-#         CREATE TABLE IF NOT EXISTS user_progress (
-#             id INTEGER PRIMARY KEY AUTOINCREMENT,
-#             user_id INTEGER,
-#             lesson_id INTEGER,
-#             completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-#             score REAL,
-#             attempts INTEGER DEFAULT 1,
-#             FOREIGN KEY (user_id) REFERENCES users (id),
-#             FOREIGN KEY (lesson_id) REFERENCES lessons (id)
-#         )
-#     """)
-    
-#     conn.execute("""
-#         CREATE TABLE IF NOT EXISTS practice_sessions (
-#             id INTEGER PRIMARY KEY AUTOINCREMENT,
-#             user_id INTEGER,
-#             sign_name TEXT,
-#             accuracy REAL,
-#             practice_date DATE,
-#             duration_seconds INTEGER,
-#             FOREIGN KEY (user_id) REFERENCES users (id)
-#         )
-#     """)
-    
-#     conn.commit()
-#     return conn
-
-# # Initialize MediaPipe
-# @st.cache_resource
-# def load_mediapipe():
-#     """Initialize MediaPipe hands solution."""
-#     mp_hands = mp.solutions.hands
-#     mp_drawing = mp.solutions.drawing_utils
-#     hands = mp_hands.Hands(
-#         static_image_mode=False,
-#         max_num_hands=2,
-#         min_detection_confidence=0.5,
-#         min_tracking_confidence=0.5
-#     )
-#     return hands, mp_hands, mp_drawing
-
-# # Sign language recognition model
-# class SignLanguageModel:
-#     def __init__(self):
-#         self.model = None
-#         self.label_encoder = None
-#         self.feature_scaler = None
-#         self.signs_data = self.load_signs_data()
-    
-#     def load_signs_data(self):
-#         """Load predefined sign language data."""
-#         return {
-#             'A': {'description': 'Closed fist with thumb on side', 'category': 'Alphabet'},
-#             'B': {'description': 'Flat hand, fingers together', 'category': 'Alphabet'},
-#             'C': {'description': 'Curved hand like letter C', 'category': 'Alphabet'},
-#             'Hello': {'description': 'Wave hand with open palm', 'category': 'Greetings'},
-#             'Thank You': {'description': 'Touch chin, move hand forward', 'category': 'Greetings'},
-#             'Please': {'description': 'Circular motion on chest with palm', 'category': 'Greetings'},
-#             'Yes': {'description': 'Fist moving up and down', 'category': 'Basic'},
-#             'No': {'description': 'Index and middle finger closing', 'category': 'Basic'},
-#             'Water': {'description': 'W handshape near mouth', 'category': 'Daily Life'},
-#             'Food': {'description': 'Fingers to mouth repeatedly', 'category': 'Daily Life'}
-#         }
-    
-#     def extract_features(self, landmarks):
-#         """Extract features from hand landmarks."""
-#         if landmarks is None:
-#             return np.zeros(42)  # 21 landmarks * 2 coordinates
-        
-#         features = []
-#         for landmark in landmarks:
-#             features.append(landmark.x)
-#             features.append(landmark.y)
-        
-#         return np.array(features)
-    
-#     def predict_sign(self, landmarks):
-#         """Predict sign from landmarks (mock implementation)."""
-#         if landmarks is None:
-#             return None, 0.0
-        
-#         # Mock prediction - in real implementation, use trained model
-#         signs = list(self.signs_data.keys())
-#         confidence = np.random.uniform(0.6, 0.95)
-#         predicted_sign = np.random.choice(signs)
-        
-#         return predicted_sign, confidence
-
-# # Lesson management
-# class LessonManager:
-#     def __init__(self, db_conn):
-#         self.db = db_conn
-#         self.initialize_lessons()
-    
-#     def initialize_lessons(self):
-#         """Initialize default lessons."""
-#         default_lessons = [
-#             {
-#                 'name': 'Alphabet Basics A-E',
-#                 'category': 'Alphabet',
-#                 'difficulty': 1,
-#                 'signs': json.dumps(['A', 'B', 'C']),
-#                 'description': 'Learn the first letters of ASL alphabet'
-#             },
-#             {
-#                 'name': 'Common Greetings',
-#                 'category': 'Greetings',
-#                 'difficulty': 1,
-#                 'signs': json.dumps(['Hello', 'Thank You', 'Please']),
-#                 'description': 'Essential greeting signs for daily communication'
-#             },
-#             {
-#                 'name': 'Basic Responses',
-#                 'category': 'Basic',
-#                 'difficulty': 2,
-#                 'signs': json.dumps(['Yes', 'No']),
-#                 'description': 'Learn to respond with basic yes/no signs'
-#             },
-#             {
-#                 'name': 'Daily Life Essentials',
-#                 'category': 'Daily Life',
-#                 'difficulty': 2,
-#                 'signs': json.dumps(['Water', 'Food']),
-#                 'description': 'Essential signs for daily needs'
-#             }
-#         ]
-        
-#         for lesson in default_lessons:
-#             try:
-#                 self.db.execute("""
-#                     INSERT OR IGNORE INTO lessons (name, category, difficulty, signs, description)
-#                     VALUES (?, ?, ?, ?, ?)
-#                 """, (lesson['name'], lesson['category'], lesson['difficulty'], 
-#                      lesson['signs'], lesson['description']))
-#                 self.db.commit()
-#             except:
-#                 pass
-    
-#     def get_lessons(self, difficulty=None):
-#         """Get lessons, optionally filtered by difficulty."""
-#         query = "SELECT * FROM lessons"
-#         params = []
-        
-#         if difficulty:
-#             query += " WHERE difficulty = ?"
-#             params.append(difficulty)
-        
-#         query += " ORDER BY difficulty, id"
-        
-#         cursor = self.db.execute(query, params)
-#         return cursor.fetchall()
-    
-#     def get_lesson_by_id(self, lesson_id):
-#         """Get specific lesson by ID."""
-#         cursor = self.db.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,))
-#         return cursor.fetchone()
-
-# # User management
-# class UserManager:
-#     def __init__(self, db_conn):
-#         self.db = db_conn
-    
-#     def create_user(self, username):
-#         """Create new user."""
-#         try:
-#             cursor = self.db.execute("""
-#                 INSERT INTO users (username) VALUES (?)
-#             """, (username,))
-#             self.db.commit()
-#             return cursor.lastrowid
-#         except sqlite3.IntegrityError:
-#             return None
-    
-#     def get_user(self, username):
-#         """Get user by username."""
-#         cursor = self.db.execute("SELECT * FROM users WHERE username = ?", (username,))
-#         return cursor.fetchone()
-    
-#     def update_user_progress(self, user_id, points, level=None):
-#         """Update user points and level."""
-#         if level:
-#             self.db.execute("""
-#                 UPDATE users SET total_points = total_points + ?, current_level = ?
-#                 WHERE id = ?
-#             """, (points, level, user_id))
-#         else:
-#             self.db.execute("""
-#                 UPDATE users SET total_points = total_points + ? WHERE id = ?
-#             """, (points, user_id))
-#         self.db.commit()
-    
-#     def update_streak(self, user_id):
-#         """Update user streak."""
-#         today = datetime.now().date()
-#         cursor = self.db.execute("""
-#             SELECT last_practice_date, streak_days FROM users WHERE id = ?
-#         """, (user_id,))
-#         result = cursor.fetchone()
-        
-#         if result:
-#             last_date, current_streak = result
-#             if last_date:
-#                 last_date = datetime.strptime(last_date, '%Y-%m-%d').date()
-#                 if (today - last_date).days == 1:
-#                     # Consecutive day
-#                     new_streak = current_streak + 1
-#                 elif (today - last_date).days == 0:
-#                     # Same day
-#                     new_streak = current_streak
-#                 else:
-#                     # Streak broken
-#                     new_streak = 1
-#             else:
-#                 new_streak = 1
-            
-#             self.db.execute("""
-#                 UPDATE users SET streak_days = ?, last_practice_date = ?
-#                 WHERE id = ?
-#             """, (new_streak, today.isoformat(), user_id))
-#             self.db.commit()
-
-# # Gamification system
-# class GamificationSystem:
-#     def __init__(self):
-#         self.level_thresholds = [0, 100, 250, 500, 1000, 2000, 4000, 8000, 15000, 30000]
-#         self.achievements = {
-#             'first_sign': {'name': 'First Sign!', 'description': 'Completed your first sign', 'points': 10},
-#             'perfect_lesson': {'name': 'Perfect!', 'description': 'Completed lesson with 100% accuracy', 'points': 50},
-#             'week_streak': {'name': 'Week Warrior', 'description': '7 day practice streak', 'points': 100},
-#             'month_streak': {'name': 'Monthly Master', 'description': '30 day practice streak', 'points': 500}
-#         }
-    
-#     def calculate_level(self, points):
-#         """Calculate user level based on points."""
-#         for level, threshold in enumerate(self.level_thresholds):
-#             if points < threshold:
-#                 return level
-#         return len(self.level_thresholds)
-    
-#     def points_to_next_level(self, points):
-#         """Calculate points needed for next level."""
-#         current_level = self.calculate_level(points)
-#         if current_level < len(self.level_thresholds):
-#             return self.level_thresholds[current_level] - points
-#         return 0
-    
-#     def award_points(self, accuracy, difficulty_multiplier=1):
-#         """Award points based on accuracy and difficulty."""
-#         base_points = int(accuracy * 100)
-#         return base_points * difficulty_multiplier
-
-# # WebRTC video processing
-# class VideoProcessor:
-#     def __init__(self):
-#         self.hands, self.mp_hands, self.mp_drawing = load_mediapipe()
-#         self.sign_model = SignLanguageModel()
-#         self.current_prediction = None
-#         self.confidence = 0.0
-#         self.frame_count = 0
-        
-#     def process(self, frame):
-#         """Process video frame for hand detection."""
-#         img = frame.to_ndarray(format="bgr24")
-#         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-#         # Process the frame
-#         results = self.hands.process(img_rgb)
-        
-#         # Draw hand landmarks
-#         if results.multi_hand_landmarks:
-#             for hand_landmarks in results.multi_hand_landmarks:
-#                 self.mp_drawing.draw_landmarks(
-#                     img, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
-                
-#                 # Predict sign
-#                 if self.frame_count % 10 == 0:  # Predict every 10 frames
-#                     predicted_sign, confidence = self.sign_model.predict_sign(hand_landmarks.landmark)
-#                     self.current_prediction = predicted_sign
-#                     self.confidence = confidence
-        
-#         # Display prediction
-#         if self.current_prediction and self.confidence > 0.7:
-#             cv2.putText(img, f"{self.current_prediction}: {self.confidence:.2f}", 
-#                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-#         self.frame_count += 1
-#         return av.VideoFrame.from_ndarray(img, format="bgr24")
-
-# def initialize_session_state():
-#     """Initialize session state variables."""
-#     if 'db_conn' not in st.session_state:
-#         st.session_state.db_conn = init_database()
-    
-#     if 'user_manager' not in st.session_state:
-#         st.session_state.user_manager = UserManager(st.session_state.db_conn)
-    
-#     if 'lesson_manager' not in st.session_state:
-#         st.session_state.lesson_manager = LessonManager(st.session_state.db_conn)
-    
-#     if 'gamification' not in st.session_state:
-#         st.session_state.gamification = GamificationSystem()
-    
-#     if 'current_user' not in st.session_state:
-#         st.session_state.current_user = None
-    
-#     if 'current_lesson' not in st.session_state:
-#         st.session_state.current_lesson = None
-    
-#     if 'lesson_progress' not in st.session_state:
-#         st.session_state.lesson_progress = {}
-    
-#     if 'practice_stats' not in st.session_state:
-#         st.session_state.practice_stats = []
-
-# def create_progress_chart(user_data):
-#     """Create progress visualization chart."""
-#     if not user_data:
-#         return None
-    
-#     # Sample data for demonstration
-#     dates = pd.date_range(start='2024-01-01', end='2024-01-30', freq='D')
-#     points = np.cumsum(np.random.randint(0, 50, len(dates)))
-    
-#     fig = go.Figure()
-#     fig.add_trace(go.Scatter(
-#         x=dates, y=points,
-#         mode='lines+markers',
-#         name='Total Points',
-#         line=dict(color='#1f77b4', width=3),
-#         marker=dict(size=6)
-#     ))
-    
-#     fig.update_layout(
-#         title="Learning Progress Over Time",
-#         xaxis_title="Date",
-#         yaxis_title="Total Points",
-#         template="plotly_white",
-#         height=300
-#     )
-    
-#     return fig
-
-# def main():
-#     st.title("🤟 SignLearn Studio")
-#     st.markdown("*AI-Powered Sign Language Learning Platform*")
-    
-#     initialize_session_state()
-    
-#     # Sidebar for user management
-#     with st.sidebar:
-#         st.header("👤 User Profile")
-        
-#         if st.session_state.current_user is None:
-#             # User login/registration
-#             username = st.text_input("Enter Username")
-#             col1, col2 = st.columns(2)
-            
-#             with col1:
-#                 if st.button("Login", use_container_width=True):
-#                     user = st.session_state.user_manager.get_user(username)
-#                     if user:
-#                         st.session_state.current_user = user
-#                         st.success(f"Welcome back, {username}!")
-#                         st.rerun()
-#                     else:
-#                         st.error("User not found!")
-            
-#             with col2:
-#                 if st.button("Register", use_container_width=True):
-#                     if username:
-#                         user_id = st.session_state.user_manager.create_user(username)
-#                         if user_id:
-#                             user = st.session_state.user_manager.get_user(username)
-#                             st.session_state.current_user = user
-#                             st.success(f"Welcome, {username}!")
-#                             st.rerun()
-#                         else:
-#                             st.error("Username already exists!")
-#                     else:
-#                         st.error("Please enter a username!")
-        
-#         else:
-#             # Display user stats
-#             user = st.session_state.current_user
-#             st.markdown(f"**Welcome, {user[1]}!** 🎉")
-            
-#             # User stats
-#             col1, col2 = st.columns(2)
-#             with col1:
-#                 st.metric("Level", user[4])
-#                 st.metric("Streak", f"{user[5]} days")
-#             with col2:
-#                 st.metric("Points", user[3])
-#                 next_level_points = st.session_state.gamification.points_to_next_level(user[3])
-#                 st.metric("To Next Level", next_level_points)
-            
-#             # Progress bar
-#             current_level = st.session_state.gamification.calculate_level(user[3])
-#             if current_level < len(st.session_state.gamification.level_thresholds):
-#                 level_start = st.session_state.gamification.level_thresholds[current_level-1] if current_level > 0 else 0
-#                 level_end = st.session_state.gamification.level_thresholds[current_level]
-#                 progress = (user[3] - level_start) / (level_end - level_start)
-#                 st.progress(progress)
-            
-#             if st.button("Logout"):
-#                 st.session_state.current_user = None
-#                 st.rerun()
-    
-#     # Main content tabs
-#     if st.session_state.current_user:
-#         tabs = st.tabs([
-#             "📚 Lessons",
-#             "🎯 Practice",
-#             "📊 Progress",
-#             "🏆 Achievements"
-#         ])
-        
-#         # Lessons Tab
-#         with tabs[0]:
-#             st.header("📚 Learning Lessons")
-            
-#             # Difficulty filter
-#             difficulty_filter = st.selectbox("Filter by Difficulty", 
-#                                            ["All Levels", "Beginner (1)", "Intermediate (2)", "Advanced (3)"])
-            
-#             difficulty = None
-#             if difficulty_filter != "All Levels":
-#                 difficulty = int(difficulty_filter.split("(")[1].split(")")[0])
-            
-#             lessons = st.session_state.lesson_manager.get_lessons(difficulty)
-            
-#             # Display lessons in cards
-#             for i in range(0, len(lessons), 2):
-#                 cols = st.columns(2)
-#                 for j, col in enumerate(cols):
-#                     if i + j < len(lessons):
-#                         lesson = lessons[i + j]
-#                         with col:
-#                             with st.container():
-#                                 st.markdown(f"### {lesson[1]}")
-#                                 st.markdown(f"**Category:** {lesson[2]}")
-#                                 st.markdown(f"**Difficulty:** {'⭐' * lesson[3]}")
-#                                 st.markdown(f"**Description:** {lesson[5]}")
-                                
-#                                 signs = json.loads(lesson[4])
-#                                 st.markdown(f"**Signs to Learn:** {', '.join(signs)}")
-                                
-#                                 if st.button(f"Start Lesson", key=f"lesson_{lesson[0]}"):
-#                                     st.session_state.current_lesson = lesson
-#                                     st.session_state.lesson_progress = {
-#                                         'current_sign': 0,
-#                                         'signs': signs,
-#                                         'scores': [],
-#                                         'start_time': time.time()
-#                                     }
-#                                     st.success(f"Started: {lesson[1]}")
-#                                     st.rerun()
-        
-#         # Practice Tab
-#         with tabs[1]:
-#             st.header("🎯 Practice Session")
-            
-#             if st.session_state.current_lesson is None:
-#                 st.info("Please select a lesson from the Lessons tab to start practicing!")
-#             else:
-#                 lesson = st.session_state.current_lesson
-#                 progress = st.session_state.lesson_progress
-                
-#                 col1, col2 = st.columns([2, 1])
-                
-#                 with col1:
-#                     st.markdown(f"### {lesson[1]}")
-                    
-#                     if progress['current_sign'] < len(progress['signs']):
-#                         current_sign = progress['signs'][progress['current_sign']]
-#                         st.markdown(f"**Current Sign:** {current_sign}")
-                        
-#                         # Display sign information
-#                         sign_model = SignLanguageModel()
-#                         if current_sign in sign_model.signs_data:
-#                             sign_info = sign_model.signs_data[current_sign]
-#                             st.markdown(f"**Description:** {sign_info['description']}")
-#                             st.markdown(f"**Category:** {sign_info['category']}")
-                        
-#                         # WebRTC video stream
-#                         st.markdown("**Show the sign to your camera:**")
-                        
-#                         webrtc_ctx = webrtc_streamer(
-#                             key="sign-detection",
-#                             mode=WebRtcMode.SENDRECV,
-#                             rtc_configuration=RTCConfiguration({
-#                                 "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-#                             }),
-#                             video_processor_factory=VideoProcessor,
-#                             media_stream_constraints={"video": True, "audio": False},
-#                             async_processing=True,
-#                         )
-                        
-#                         # Practice controls
-#                         col_a, col_b, col_c = st.columns(3)
-                        
-#                         with col_a:
-#                             if st.button("✅ Correct Sign", type="primary"):
-#                                 # Award points and move to next sign
-#                                 accuracy = np.random.uniform(0.8, 1.0)  # Mock accuracy
-#                                 points = st.session_state.gamification.award_points(accuracy, lesson[3])
-                                
-#                                 progress['scores'].append(accuracy)
-#                                 progress['current_sign'] += 1
-                                
-#                                 # Update user progress
-#                                 st.session_state.user_manager.update_user_progress(
-#                                     st.session_state.current_user[0], points
-#                                 )
-#                                 st.session_state.user_manager.update_streak(
-#                                     st.session_state.current_user[0]
-#                                 )
-                                
-#                                 st.success(f"Great! +{points} points")
-#                                 time.sleep(1)
-#                                 st.rerun()
-                        
-#                         with col_b:
-#                             if st.button("❌ Need Help"):
-#                                 st.info("💡 **Tip:** Practice the hand shape slowly and make sure your hand is clearly visible to the camera.")
-                        
-#                         with col_c:
-#                             if st.button("⏭️ Skip Sign"):
-#                                 progress['current_sign'] += 1
-#                                 st.rerun()
-                    
-#                     else:
-#                         # Lesson completed
-#                         st.success("🎉 Lesson Completed!")
-                        
-#                         if progress['scores']:
-#                             avg_accuracy = np.mean(progress['scores'])
-#                             total_time = time.time() - progress['start_time']
-                            
-#                             st.markdown(f"**Average Accuracy:** {avg_accuracy:.1%}")
-#                             st.markdown(f"**Time Taken:** {total_time/60:.1f} minutes")
-                            
-#                             # Calculate final score and points
-#                             final_points = st.session_state.gamification.award_points(avg_accuracy, lesson[3])
-#                             st.markdown(f"**Points Earned:** {final_points}")
-                            
-#                             # Store lesson completion
-#                             st.session_state.db_conn.execute("""
-#                                 INSERT INTO user_progress (user_id, lesson_id, score, attempts)
-#                                 VALUES (?, ?, ?, 1)
-#                             """, (st.session_state.current_user[0], lesson[0], avg_accuracy))
-#                             st.session_state.db_conn.commit()
-                        
-#                         if st.button("🔄 Practice Again"):
-#                             st.session_state.lesson_progress = {
-#                                 'current_sign': 0,
-#                                 'signs': json.loads(lesson[4]),
-#                                 'scores': [],
-#                                 'start_time': time.time()
-#                             }
-#                             st.rerun()
-                        
-#                         if st.button("📚 Back to Lessons"):
-#                             st.session_state.current_lesson = None
-#                             st.session_state.lesson_progress = {}
-#                             st.rerun()
-                
-#                 with col2:
-#                     # Lesson progress sidebar
-#                     st.markdown("### Lesson Progress")
-                    
-#                     signs = progress['signs']
-#                     current_idx = progress['current_sign']
-                    
-#                     for i, sign in enumerate(signs):
-#                         if i < current_idx:
-#                             st.markdown(f"✅ {sign}")
-#                         elif i == current_idx:
-#                             st.markdown(f"🔄 **{sign}** (Current)")
-#                         else:
-#                             st.markdown(f"⏳ {sign}")
-                    
-#                     # Progress bar
-#                     progress_pct = current_idx / len(signs)
-#                     st.progress(progress_pct)
-#                     st.markdown(f"Progress: {current_idx}/{len(signs)} signs")
-        
-#         # Progress Tab
-#         with tabs[2]:
-#             st.header("📊 Your Progress")
-            
-#             user = st.session_state.current_user
-            
-#             # Overall stats
-#             col1, col2, col3, col4 = st.columns(4)
-            
-#             with col1:
-#                 st.metric("Total Points", user[3], delta="+50 today")
-#             with col2:
-#                 st.metric("Current Level", user[4])
-#             with col3:
-#                 st.metric("Practice Streak", f"{user[5]} days")
-#             with col4:
-#                 # Get completed lessons count
-#                 cursor = st.session_state.db_conn.execute("""
-#                     SELECT COUNT(DISTINCT lesson_id) FROM user_progress WHERE user_id = ?
-#                 """, (user[0],))
-#                 completed_lessons = cursor.fetchone()[0]
-#                 st.metric("Lessons Completed", completed_lessons)
-            
-#             # Progress chart
-#             fig = create_progress_chart(user)
-#             if fig:
-#                 st.plotly_chart(fig, use_container_width=True)
-            
-#             # Recent activity
-#             st.subheader("Recent Activity")
-#             cursor = st.session_state.db_conn.execute("""
-#                 SELECT l.name, up.score, up.completed_at
-#                 FROM user_progress up
-#                 JOIN lessons l ON up.lesson_id = l.id
-#                 WHERE up.user_id = ?
-#                 ORDER BY up.completed_at DESC
-#                 LIMIT 10
-#             """, (user[0],))
-            
-#             recent_activity = cursor.fetchall()
-            
-#             if recent_activity:
-#                 activity_df = pd.DataFrame(recent_activity, 
-#                                          columns=['Lesson', 'Score', 'Completed'])
-#                 activity_df['Score'] = activity_df['Score'].apply(lambda x: f"{x:.1%}")
-#                 st.dataframe(activity_df, use_container_width=True)
-#             else:
-#                 st.info("No practice sessions yet. Start learning to see your progress here!")
-        
-#         # Achievements Tab
-#         with tabs[3]:
-#             st.header("🏆 Achievements")
-            
-#             # Display achievements
-#             achievements = st.session_state.gamification.achievements
-            
-#             col1, col2 = st.columns(2)
-            
-#             for i, (key, achievement) in enumerate(achievements.items()):
-#                 with col1 if i % 2 == 0 else col2:
-#                     with st.container():
-#                         # Mock achievement status
-#                         is_unlocked = np.random.choice([True, False])
-                        
-#                         if is_unlocked:
-#                             st.markdown(f"### 🏆 {achievement['name']}")
-#                             st.markdown(f"**Description:** {achievement['description']}")
-#                             st.markdown(f"**Points:** {achievement['points']}")
-#                             st.success("Unlocked!")
-#                         else:
-#                             st.markdown(f"### 🔒 {achievement['name']}")
-#                             st.markdown(f"**Description:** {achievement['description']}")
-#                             st.markdown(f"**Points:** {achievement['points']}")
-#                             st.info("Not unlocked yet")
-            
-#             # Leaderboard (mock data)
-#             st.subheader("🥇 Leaderboard")
-#             leaderboard_data = {
-#                 'Rank': [1, 2, 3, 4, 5],
-#                 'Username': ['SignMaster', 'HandTalker', 'GestureGuru', user[1], 'LearningStar'],
-#                 'Points': [5000, 4500, 4000, user[3], 3000],
-#                 'Level': [8, 7, 7, user[4], 6]
-#             }
-            
-#             leaderboard_df = pd.DataFrame(leaderboard_data)
-#             st.dataframe(leaderboard_df, use_container_width=True)
-    
-#     else:
-#         # Welcome screen for non-logged-in users
-#         st.markdown("""
-#         ## Welcome to SignLearn Studio! 🤟
-        
-#         **Learn American Sign Language (ASL) with AI-powered recognition and gamified lessons.**
-        
-#         ### Features:
-#         - 🎯 **Real-time Hand Tracking**: Uses computer vision to track your hand movements
-#         - 🤖 **AI Recognition**: Advanced machine learning models recognize your signs
-#         - 🎮 **Gamified Learning**: Earn points, level up, and maintain streaks
-#         - 📚 **Structured Lessons**: Progress through carefully designed lesson plans
-#         - 📊 **Progress Tracking**: Monitor your learning journey with detailed analytics
-#         - 🏆 **Achievements**: Unlock badges and compete on leaderboards
-        
-#         ### Getting Started:
-#         1. **Register** or **Login** using the sidebar
-#         2. **Choose a lesson** from the Lessons tab
-#         3. **Practice signs** using your webcam
-#         4. **Earn points** and level up as you learn!
-        
-#         ---
-#         *Ready to bridge the communication gap? Sign up now and start your ASL journey!* ✨
-#         """)
-        
-#         # Demo video placeholder
-#         st.subheader("📹 How It Works")
-#         st.info("Camera feed will appear here when you start practicing. The app will detect your hand gestures and provide real-time feedback!")
-
-# if __name__ == "__main__":
-#     main()
