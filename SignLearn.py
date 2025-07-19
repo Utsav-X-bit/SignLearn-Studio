@@ -576,24 +576,36 @@ class GestureComparator:
         return None
     
     def normalize_landmarks(self, landmarks):
-        """Normalize landmarks to make them scale and position invariant."""
+        """Normalize landmarks for scale, position, and orientation invariance using Procrustes analysis."""
         if not landmarks:
             return None
-        
-        # Convert to numpy array
+
         points = np.array(landmarks)
-        
-        # Center around wrist (landmark 0)
+        # Center at wrist (landmark 0)
         wrist = points[0]
         centered = points - wrist
-        
-        # Scale based on hand size (distance from wrist to middle finger tip)
-        hand_size = np.linalg.norm(centered[12])  # Middle finger tip
-        if hand_size > 0:
-            normalized = centered / hand_size
+
+        # Scale: use max distance between any two points for better hand size normalization
+        dists = np.linalg.norm(centered[:, :2][None, :, :] - centered[:, :2][:, None, :], axis=-1)
+        max_dist = np.max(dists)
+        if max_dist > 0:
+            scaled = centered / max_dist
         else:
-            normalized = centered
-        
+            scaled = centered
+
+        # Procrustes alignment: align hand orientation to a canonical direction
+        # We'll align the vector from wrist (0) to middle finger MCP (9) to the x-axis
+        v = scaled[9][:2]  # 2D vector from wrist to middle finger MCP
+        angle = np.arctan2(v[1], v[0])
+        c, s = np.cos(-angle), np.sin(-angle)
+        R = np.array([[c, -s], [s, c]])
+        scaled_xy = scaled[:, :2] @ R.T
+        # Keep z as is (or set to 0 if only 2D is needed)
+        if scaled.shape[1] == 3:
+            normalized = np.concatenate([scaled_xy, scaled[:, 2:3]], axis=1)
+        else:
+            normalized = scaled_xy
+
         return normalized
     
     def calculate_similarity(self, ref_landmarks, user_landmarks):
@@ -636,79 +648,12 @@ class GestureComparator:
             return "Keep practicing! 💪", "error"
 
 # Enhanced Sign Language Model
-class SignLanguageModel:
-    def __init__(self):
-        self.model = None
-        self.label_encoder = None
-        self.feature_scaler = None
-        self.signs_data = self.load_signs_data()
-        self.gesture_comparator = GestureComparator()
-    
-    def load_signs_data(self):
-        """Load predefined sign language data."""
-        return {
-            'A': {'description': 'Closed fist with thumb on side', 'category': 'Alphabet'},
-            'B': {'description': 'Flat hand, fingers together', 'category': 'Alphabet'},
-            'C': {'description': 'Curved hand like letter C', 'category': 'Alphabet'},
-            'D': {'description': 'Index finger pointing up', 'category': 'Alphabet'},
-            'E': {'description': 'Bent fingertips', 'category': 'Alphabet'},
-            'Hello': {'description': 'Wave hand with open palm', 'category': 'Greetings'},
-            'Thank You': {'description': 'Touch chin, move hand forward', 'category': 'Greetings'},
-            'Please': {'description': 'Circular motion on chest with palm', 'category': 'Greetings'},
-            'Sorry': {'description': 'Circular fist motion on chest', 'category': 'Greetings'},
-            'Yes': {'description': 'Fist moving up and down', 'category': 'Basic'},
-            'No': {'description': 'Index and middle finger closing', 'category': 'Basic'},
-            'Maybe': {'description': 'Alternating flat hands up and down', 'category': 'Basic'},
-            'Water': {'description': 'W handshape near mouth', 'category': 'Daily Life'},
-            'Food': {'description': 'Fingers to mouth repeatedly', 'category': 'Daily Life'},
-            'Eat': {'description': 'Repeated fingertips to mouth motion', 'category': 'Daily Life'},
-            'Drink': {'description': 'C handshape tilted toward mouth', 'category': 'Daily Life'},
-            'Mother': {'description': 'Thumb touching chin', 'category': 'Family'},
-            'Father': {'description': 'Thumb touching forehead', 'category': 'Family'},
-            'Sister': {'description': 'L handshape movement', 'category': 'Family'},
-            'Brother': {'description': 'L handshape starting from forehead', 'category': 'Family'},
-            'Red': {'description': 'Index finger on lips moving down', 'category': 'Colors'},
-            'Blue': {'description': 'B handshape twisting motion', 'category': 'Colors'},
-            'Green': {'description': 'G handshape shaking', 'category': 'Colors'},
-            'Happy': {'description': 'Upward motion on chest', 'category': 'Emotions'},
-            'Sad': {'description': 'Fingers moving down face', 'category': 'Emotions'},
-            'Angry': {'description': 'Claw hand moving down face', 'category': 'Emotions'},
-            '1': {'description': 'Index finger up', 'category': 'Numbers'},
-            '2': {'description': 'Index and middle finger', 'category': 'Numbers'},
-            '3': {'description': 'Thumb, index, and middle finger', 'category': 'Numbers'},
-            '4': {'description': 'Four fingers up, thumb tucked', 'category': 'Numbers'},
-            '5': {'description': 'Open hand, all fingers extended', 'category': 'Numbers'}
-        }
-    
-    def extract_features(self, landmarks):
-        """Extract features from hand landmarks."""
-        if landmarks is None:
-            return np.zeros(42)  # 21 landmarks * 2 coordinates
-        
-        features = []
-        for landmark in landmarks:
-            features.append(landmark.x)
-            features.append(landmark.y)
-        
-        return np.array(features)
-    
-    def predict_sign(self, landmarks):
-        """Predict sign from landmarks (enhanced with confidence)."""
-        if landmarks is None:
-            return None, 0.0
-        
-        # Mock prediction with more realistic confidence
-        signs = list(self.signs_data.keys())
-        confidence = np.random.uniform(0.6, 0.95)
-        predicted_sign = np.random.choice(signs)
-        
-        return predicted_sign, confidence
 
 # Enhanced Video Processor with gesture comparison
 class VideoProcessor:
     def __init__(self, target_sign=None, reference_landmarks=None):
         self.hands, self.mp_hands, self.mp_drawing = load_mediapipe()
-        self.sign_model = SignLanguageModel()
+        # self.sign_model = SignLanguageModel()  # Removed unused model
         self.gesture_comparator = GestureComparator()
         self.current_prediction = None
         self.confidence = 0.0
@@ -739,17 +684,11 @@ class VideoProcessor:
                 # Extract current landmarks
                 current_landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
                 
-                # Predict sign
-                if self.frame_count % 10 == 0:  # Predict every 10 frames
-                    predicted_sign, confidence = self.sign_model.predict_sign(hand_landmarks.landmark)
-                    self.current_prediction = predicted_sign
-                    self.confidence = confidence
-                    
-                    # Compare with reference if available
-                    if self.reference_landmarks:
-                        self.similarity_score = self.gesture_comparator.calculate_similarity(
-                            self.reference_landmarks, current_landmarks
-                        )
+                # Compare with reference if available
+                if self.reference_landmarks:
+                    self.similarity_score = self.gesture_comparator.calculate_similarity(
+                        self.reference_landmarks, current_landmarks
+                    )
         
         # Display prediction and similarity
         if self.current_prediction and self.confidence > 0.5:
@@ -843,16 +782,7 @@ def display_video_tutorial(current_sign):
     else:
         # Fallback for signs without videos
         st.info(f"📹 Video tutorial for '{current_sign}' is coming soon!")
-        sign_model = SignLanguageModel()
-        if current_sign in sign_model.signs_data:
-            sign_info = sign_model.signs_data[current_sign]
-            st.markdown(f"""
-            **Sign Description:** {sign_info['description']}
-            
-            **Category:** {sign_info['category']}
-            
-            💡 **Tip:** Practice the hand shape slowly and focus on finger positioning.
-            """)
+        # If you want to show sign info, you can use a static dictionary or remove this block
         all_videos = video_manager.get_videos_by_category('Basic')
         if all_videos:
             st.write("**You might also like these tutorials:**")
@@ -1290,11 +1220,7 @@ def main():
                                             else:
                                                 st.info(f"Video tutorial for '{current_sign}' coming soon!")
                                             # Display sign information
-                                            sign_model = SignLanguageModel()
-                                            if current_sign in sign_model.signs_data:
-                                                sign_info = sign_model.signs_data[current_sign]
-                                                st.markdown(f"**Description:** {sign_info['description']}")
-                                                st.markdown(f"**Category:** {sign_info['category']}")
+                                            # If you want to show sign info, you can use a static dictionary or remove this block
                                         else:
                                             st.info(f"Video tutorial for '{current_sign}' coming soon!")
 # ...existing code...
@@ -1389,57 +1315,27 @@ def main():
                             async_processing=True,
                         )
 
-                        # --- Display current detection results and auto-advance option ---
+                        # --- Display current detection results and always show similarity score below the camera ---
                         if webrtc_ctx.video_processor:
                             processor = webrtc_ctx.video_processor
                             similarity = getattr(processor, 'similarity_score', 0)
                             detected_sign = getattr(processor, 'current_prediction', None)
 
-                            if similarity >= 70:
-                                st.success(f"✅ Correct sign! Similarity: {similarity:.1f}%")
-                                if st.button("Next Sign ▶️", use_container_width=True):
-                                    progress['scores'].append(similarity)
-                                    progress['similarity_scores'].append(similarity)
-                                    progress['current_sign'] += 1
-                                    st.session_state.video_processor = None  # Reset for next sign
-                                    st.experimental_rerun()
-                            else:
-                                # if detected_sign:
-                                #     st.markdown(f"**Detected:** {detected_sign}")
-                                if similarity > 0:
-                                    if similarity >= 60:
-                                        st.info(f"Similarity: {similarity:.1f}% - Good job! 👍")
-                                    elif similarity >= 50:
-                                        st.warning(f"Similarity: {similarity:.1f}% - Getting better! 📈")
-                                    else:
-                                        st.error(f"Similarity: {similarity:.1f}% - Keep practicing! 💪")
-                        # webrtc_ctx = webrtc_streamer(
-                        #     key=f"sign-detection-{current_sign}",
-                        #     mode=WebRtcMode.SENDRECV,
-                        #     rtc_configuration=RTCConfiguration({
-                        #         "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-                        #     }),
-                        #     video_frame_callback=st.session_state.video_processor.process,
-                        #     async_processing=True,
-                        #    )
+                            # Show detected sign if available
+                            if detected_sign:
+                                st.markdown(f"**Detected:** {detected_sign}")
 
-                            # Display current detection results
-                        if webrtc_ctx.video_processor:
-                            processor = webrtc_ctx.video_processor
-                            if hasattr(processor, 'current_prediction') and processor.current_prediction:
-                                st.markdown(f"**Detected:** {processor.current_prediction}")
-
-                                    # Display similarity score with color coding
-                                if hasattr(processor, 'similarity_score') and processor.similarity_score > 0:
-                                    similarity = processor.similarity_score
-                                    if similarity >= 85:
-                                        st.success(f"Similarity: {similarity:.1f}% - Excellent! 🎉")
-                                    elif similarity >= 70:
-                                        st.info(f"Similarity: {similarity:.1f}% - Good job! 👍")
-                                    elif similarity >= 50:
-                                        st.warning(f"Similarity: {similarity:.1f}% - Getting better! 📈")
-                                    else:
-                                        st.error(f"Similarity: {similarity:.1f}% - Keep practicing! 💪")
+                            # Always show similarity score and progress message below the camera
+                            if similarity > 0:
+                                st.markdown(f"### Similarity: {similarity:.1f}%")
+                                if similarity >= 90:
+                                    st.success("✅ Correct sign! Great job!")
+                                elif similarity >= 70:
+                                    st.info("Almost there! Keep adjusting your hand.")
+                                elif similarity >= 50:
+                                    st.warning("Getting closer, try to match the reference more closely.")
+                                else:
+                                    st.error("Keep practicing!")
 
                     with progress_col:
                         st.markdown("#### 📊 Progress")
